@@ -1,0 +1,16 @@
+{
+  "name": "rssi-rescue-pod-backend",
+  "private": true,
+  "type": "module",
+  "description": "Backend for the RSSI Rescue Pod (no dependencies, Node 22.18+).",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/index.ts",
+    "sim": "node tools/simulate.ts",
+    "bridge": "python tools/serial_bridge.py --echo",
+    "typecheck": "tsc -p ."
+  },
+  "license": "MIT"
+}

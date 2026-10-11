@@ -1,0 +1,11 @@
+MLX90614 detected OK.
+Pod ready.
+{"pod":"POD-01","seq":1,"up":700,"mlx":1,"obj":27.90,"amb":27.40,"thermal":0,"rssi":-127,"probes":0,"signal":0,"flame":-1}
+# Obj: 27.90 | Amb: 27.40 | Thermal: 0 || Probes: 0 | MaxRSSI: -127 | Signal: 0
+{"pod":"POD-01","seq":2,"up":1400,"mlx":1,"obj":28.10,"amb":27.40,"thermal":0,"rssi":-64,"probes":2,"signal":1,"flame":-1}
+# Obj: 28.10 | Amb: 27.40 | Thermal: 0 || Probes: 2 | MaxRSSI: -64 | Signal: 1
+{"pod":"POD-01","seq":3,"up":2100,"mlx":1,"obj":33.70,"amb":27.50,"thermal":1,"rssi":-61,"probes":3,"signal":1,"flame":-1}
+# Obj: 33.70 | Amb: 27.50 | Thermal: 1 || Probes: 3 | MaxRSSI: -61 | Signal: 1
+{"pod":"POD-01","seq":4,"up":2800,"mlx":1,"obj":34.20,"amb":27.50,"thermal":1,"rssi":-80,"probes":0,"signal":1,"flame":-1}
+{"pod":"POD-01","seq":5,"up":3500,"mlx":1,"obj":34.00,"amb":27.50,"thermal":1,"rssi":-127,"probes":0,"signal":0,"flame":-1}
+{"pod":"POD-01","seq":6,"up":4200,"mlx":1,"obj":28.00,"amb":27.40,"thermal":0,"rssi":-127,"probes":0,"signal":0,"flame":-1}

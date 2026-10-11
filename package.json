@@ -1,0 +1,16 @@
+{
+  "name": "rssi-rescue-pod",
+  "private": true,
+  "type": "module",
+  "description": "RSSI Rescue & Search Pod — website + backend + firmware",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "postinstall": "npm --prefix frontend install --no-audit --no-fund",
+    "dev": "node scripts/dev.mjs",
+    "sim": "node backend/tools/simulate.ts",
+    "bridge": "python backend/tools/serial_bridge.py --echo"
+  },
+  "license": "MIT"
+}
