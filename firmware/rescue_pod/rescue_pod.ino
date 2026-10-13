@@ -1,40 +1,28 @@
 /*
-  RSSI Rescue Pod — Hardware v3
+  RSSI Rescue Pod — firmware
   Board: NodeMCU 1.0 (ESP-12E Module)
 
-  How SIGNAL works: the ESP8266 never connects to a phone. It LISTENS to the WiFi packets
-  phones transmit anyway and measures how strong they are (RSSI). Stronger = closer.
-  A phone that is switched off / dead transmits nothing, so it can't be heard — that's
-  what the thermal sensor is for.
+  Every ~0.7 s the pod:
+    - listens to WiFi packets that phones transmit (channels 1, 6, 11) and measures their
+      strength (RSSI). It never connects to a phone; a switched-off / dead phone can't be heard.
+    - reads the MLX90614 infrared thermometer: "human" = 30–38 °C and warmer than ambient.
+    - reads the MQ gas sensor (smoke / flammable gas).
+    - drives the LEDs and buzzer, and prints ONE JSON line on Serial for the website
+      (plus a human-readable "#" line for the Serial Monitor, which the website ignores).
 
-  What changed from v1 (debug build 2):
-    - Every sensing window is also printed as ONE JSON line on Serial. The website (CONNECT
-      POD (USB)) reads those lines. The old human-readable debug line is still printed
-      (SERIAL_DEBUG_TEXT) and ignored by the website, so Serial Monitor debugging still works.
-    - SIGNAL_MODE (default SIGNAL_PHONES) counts every packet a phone/laptop SENDS:
-      WiFi searches (probe requests) and normal traffic from phones already on a WiFi
-      network. It ignores packets SENT BY ROUTERS (beacons etc.), which in v1 lit the
-      SIGNAL LED with no phone around. SIGNAL_ALL = exactly v1 behaviour.
-    - SIGNAL is held for SIGNAL_HOLD_MS after the last strong phone packet, because phones
-      transmit in bursts — otherwise the LED would flicker.
-    - Thermal threshold retuned from real readings: start at +1.5 °C above ambient, stay on
-      while +1.0 °C, hold 1.2 s (was a flat +2.5 °C, which missed fingers in a warm room).
-    - MQ gas sensor (MQ-2 / MQ-135 / MQ-5) instead of the flame sensor: detects SMOKE or a
-      FLAMMABLE GAS LEAK in the air around the pod. Lights the orange LED (blinks while the
-      sensor warms up), marks a hazard zone on the map, and never cancels a human detection.
-    - Optional WiFi uplink (UPLINK_WIFI) so the pod can report without a USB cable.
-      NOT yet tested on hardware — start with the USB serial bridge.
-
-  Wiring (unchanged):
+  Wiring:
     3V3 -> MLX90614 VCC      GND -> MLX90614 GND
     D1 (GPIO5)  -> MLX SCL   D2 (GPIO4)  -> MLX SDA
     D5 (GPIO14) -> red LED #1 SIGNAL   (via resistor to GND)
     D6 (GPIO12) -> red LED #2 THERMAL  (via resistor to GND)
     D7 (GPIO13) -> orange LED HAZARD (smoke/gas) (via resistor to GND)
     D8 (GPIO15) -> buzzer (other leg to GND)
-    MQ gas sensor module:  VCC -> VIN (5 V)   GND -> GND   DO -> not connected
-                           AO -> 10 kΩ -> A0,  and A0 -> 10 kΩ -> GND   (divider: AO can reach 5 V)
-    D0, D3, D4  -> unused (boot-mode restricted)
+    MQ gas sensor module (GAS_DIGITAL, default — no resistors needed):
+      VCC -> VIN (5 V)    GND -> GND    DO -> D0 (GPIO16)    AO -> not connected
+      Set the alarm level with the blue potentiometer on the module (see GAS settings below).
+    MQ gas sensor module (GAS_ANALOG — needs two equal resistors, e.g. 10 kΩ + 10 kΩ):
+      VCC -> VIN    GND -> GND    AO -> resistor -> A0, and A0 -> resistor -> GND    DO -> not connected
+    D3, D4 -> unused (they must be HIGH at boot)
 */
 
 #include <ESP8266WiFi.h>
@@ -50,7 +38,7 @@ extern "C" {
 
 // ---------------- modes ----------------
 #define TEST_MODE_WIFI_ONLY false
-#define SERIAL_DEBUG_TEXT   true   // also print the human-readable line from v1
+#define SERIAL_DEBUG_TEXT   true   // also print a human-readable "#" line for the Serial Monitor
 #define UPLINK_WIFI         false  // true = POST readings to the server over WiFi (see below)
 
 // ---------------- pins ----------------
@@ -70,7 +58,7 @@ extern "C" {
 #define THERMAL_HOLD_MS           1200  // keep THERMAL on this long after the last warm reading
 
 // ---------------- signal (passive WiFi listening) ----------------
-#define SIGNAL_ALL          0       // every packet, including routers (v1 behaviour)
+#define SIGNAL_ALL          0       // every packet, including routers (original behaviour)
 #define SIGNAL_PHONES       1       // packets sent by phones/laptops only (recommended)
 #define SIGNAL_PROBES_ONLY  2       // only "searching for WiFi" packets (strictest)
 #define SIGNAL_MODE         SIGNAL_PHONES
@@ -80,16 +68,27 @@ extern "C" {
 #define LISTEN_WINDOW_MS    600     // hop 1/6/11 for this long per reading
 
 // ---------------- MQ gas sensor (smoke / flammable gas) ----------------
-// The MQ heater needs time: readings are ignored for GAS_WARMUP_MS after power-on (the orange
-// LED blinks meanwhile). Then the pod learns the clean-air value ("baseline") and raises the
-// alarm when the reading rises GAS_RISE_ALARM above it. Modules differ a lot, so this relative
-// rule works better than one fixed number. Tune with the "Gas:" values in the debug line.
-#define GAS_SENSOR_ENABLED  true
-#define GAS_PIN             A0
-#define GAS_WARMUP_MS       60000   // 1 min; a brand-new sensor is steadier after a few hours powered
+// GAS_DIGITAL: the module's DO pin. Its own comparator decides "gas / no gas" using the blue
+//   potentiometer. To set it: after warm-up, in clean air, turn the pot until the module's
+//   "DO" LED just turns OFF; smoke near the sensor should then turn it ON.
+// GAS_ANALOG:  the AO pin through a resistor divider (A0 must stay below 3.3 V). The pod learns
+//   the clean-air value and alarms when the reading rises GAS_RISE_ALARM above it.
+// Either way readings are ignored for GAS_WARMUP_MS while the heater warms up (orange LED blinks).
+#define GAS_OFF             0
+#define GAS_DIGITAL         1
+#define GAS_ANALOG          2
+#define GAS_MODE            GAS_DIGITAL
+
+#define GAS_DO_PIN          D0      // GAS_DIGITAL: module DO -> D0 (GPIO16)
+#define GAS_DO_ACTIVE_LOW   true    // most MQ modules pull DO LOW when gas is detected
+#define GAS_CONFIRM_READS   2       // DO must agree this many readings in a row (no flicker)
+
+#define GAS_PIN             A0      // GAS_ANALOG: module AO -> divider -> A0
 #define GAS_RISE_ALARM      120     // ALARM when this many counts (0..1023) above clean-air baseline
 #define GAS_RISE_CLEAR      60      // ...and clear again below this rise (no flicker)
 #define GAS_ABSOLUTE_ALARM  650     // alarm at this raw value regardless of baseline
+
+#define GAS_WARMUP_MS       60000   // 1 min; a brand-new sensor is steadier after a few hours powered
 #define GAS_BEEP            true    // short low beep when smoke/gas and no person detected
 
 // ---------------- WiFi uplink (optional, untested on hardware) ----------------
@@ -116,6 +115,8 @@ volatile uint32_t lastStrongProbeMs = 0;   // 0 = never
 bool thermalState = false;                 // thermal currently detected (for hysteresis)
 float gasBase = -1;                        // learned clean-air reading (-1 = not yet)
 bool gasAlarm = false;
+uint8_t gasStreak = 0;                     // GAS_DIGITAL: consecutive readings disagreeing with gasAlarm
+uint32_t lastMlxRetry = 0;
 uint32_t lastWarmMs = 0;                   // last reading that passed the thermal test
 
 struct RxControl {
@@ -249,7 +250,9 @@ void setup() {
 
   Wire.begin(D2, D1);
   mlxOK = mlx.begin();
-  Serial.println(mlxOK ? "MLX90614 detected OK." : "!!! MLX90614 NOT DETECTED !!!");
+  Serial.println(mlxOK ? "MLX90614 detected OK."
+                       : "!!! MLX90614 NOT DETECTED — check VCC->3V3, GND, SCL->D1, SDA->D2 (will keep retrying)");
+  if (GAS_MODE == GAS_DIGITAL) pinMode(GAS_DO_PIN, INPUT);
 
   WiFi.persistent(false);   // don't rewrite flash on every (re)connect
   WiFi.mode(WIFI_STA);
@@ -277,6 +280,13 @@ void loop() {
   uint32_t lastProbe = lastStrongProbeMs;
   bool signalDetected = lastProbe != 0 && (millis() - lastProbe) < SIGNAL_HOLD_MS;
 
+  // If the thermometer wasn't found at power-on (loose wire), keep trying every 5 s.
+  if (!mlxOK && millis() - lastMlxRetry > 5000) {
+    lastMlxRetry = millis();
+    mlxOK = mlx.begin();
+    if (mlxOK) Serial.println("MLX90614 found.");
+  }
+
   double objTemp = mlxOK ? mlx.readObjectTempC() : NAN;
   double ambTemp = mlxOK ? mlx.readAmbientTempC() : NAN;
   // Hysteresis: a higher bar to switch ON than to stay ON, so readings near the edge don't flicker.
@@ -288,10 +298,31 @@ void loop() {
   bool thermalDetected = warmNow || (lastWarmMs != 0 && millis() - lastWarmMs < THERMAL_HOLD_MS);
   thermalState = thermalDetected;
 
+  // Why THERMAL is on/off — printed in the Serial Monitor line, to make tuning easy.
+  const char *thermalWhy =
+      !mlxOK                                  ? "MLX NOT FOUND - check wiring" :
+      isnan(objTemp) || isnan(ambTemp)        ? "MLX read failed" :
+      warmNow                                 ? "HUMAN" :
+      thermalDetected                         ? "holding" :
+      objTemp < HUMAN_TEMP_MIN                ? "too cold (<30C) - aim closer / at skin" :
+      objTemp > HUMAN_TEMP_MAX                ? "too hot (>38C) - not a person" :
+                                                "not warmer than ambient enough";
+
   // smoke: -1 = no gas sensor, -2 = warming up, 0 = clean air, 1 = smoke / gas detected
   int gasRaw = -1;
   int smoke = -1;
-  if (GAS_SENSOR_ENABLED) {
+  if (GAS_MODE == GAS_DIGITAL) {
+    bool doActive = (digitalRead(GAS_DO_PIN) == LOW) == GAS_DO_ACTIVE_LOW;
+    gasRaw = doActive ? 1 : 0;                       // printed in the debug line only
+    if (millis() < GAS_WARMUP_MS) {
+      smoke = -2;
+    } else {
+      // change state only after GAS_CONFIRM_READS readings in a row disagree with it
+      gasStreak = (doActive != gasAlarm) ? gasStreak + 1 : 0;
+      if (gasStreak >= GAS_CONFIRM_READS) { gasAlarm = doActive; gasStreak = 0; }
+      smoke = gasAlarm ? 1 : 0;
+    }
+  } else if (GAS_MODE == GAS_ANALOG) {
     gasRaw = analogRead(GAS_PIN);
     if (millis() < GAS_WARMUP_MS) {
       smoke = -2;
@@ -321,9 +352,9 @@ void loop() {
   jsonInt(json, "probes", probeCount);
   jsonInt(json, "signal", signalDetected ? 1 : 0);
   jsonInt(json, "smoke", smoke);
-  jsonInt(json, "gas", gasRaw);
-  jsonInt(json, "gasBase", gasBase < 0 ? -1 : (long)gasBase);
-  jsonInt(json, "flame", -1, true);     // flame sensor not fitted (A0 is used by the gas sensor)
+  jsonInt(json, "gas", GAS_MODE == GAS_ANALOG ? gasRaw : -1);        // analog value only
+  jsonInt(json, "gasBase", GAS_MODE == GAS_ANALOG && gasBase >= 0 ? (long)gasBase : -1);
+  jsonInt(json, "flame", -1, true);     // no flame sensor fitted
   json += "}";
   Serial.println(json);
 
@@ -332,10 +363,14 @@ void loop() {
     Serial.print("# Obj: "); Serial.print(objTemp);
     Serial.print(" | Amb: "); Serial.print(ambTemp);
     Serial.print(" | Thermal: "); Serial.print(thermalDetected);
+    Serial.print(" ("); Serial.print(thermalWhy); Serial.print(")");
     Serial.print(" || PhonePkts: "); Serial.print(probeCount);
     Serial.print(" | MaxRSSI: "); Serial.print(maxRssiThisWindow);
     Serial.print(" | Signal: "); Serial.print(signalDetected);
-    if (GAS_SENSOR_ENABLED) {
+    if (GAS_MODE == GAS_DIGITAL) {
+      Serial.print(" || Gas DO: "); Serial.print(gasRaw ? "ACTIVE" : "idle");
+      Serial.print(smoke == -2 ? " WARMING UP" : smoke == 1 ? " SMOKE/GAS!" : " ok");
+    } else if (GAS_MODE == GAS_ANALOG) {
       Serial.print(" || Gas: "); Serial.print(gasRaw);
       Serial.print(" (clean air "); Serial.print((int)gasBase); Serial.print(")");
       Serial.print(smoke == -2 ? " WARMING UP" : smoke == 1 ? " SMOKE/GAS!" : " ok");

@@ -36,7 +36,7 @@ and guides each team on their phone.
 **Pod (ESP8266)**
 - Passive Wi-Fi listening on channels 1, 6 and 11 — detects phones without connecting to them or to any network
 - Infrared body-heat check that compares the target with the surrounding temperature to avoid false alarms
-- MQ gas sensor for smoke and flammable gas, with automatic clean-air calibration
+- MQ gas sensor for smoke and flammable gas (digital output, or analog with automatic calibration)
 - Red / red / orange LEDs and a buzzer that follow the decision priority
 - One JSON line per reading over USB, read directly by the website
 
@@ -108,8 +108,9 @@ walls and floors can sit inside the 30–38 °C range on their own.
 ### Smoke and gas (MQ sensor)
 
 The MQ-2 detects smoke and flammable gases (LPG, methane, hydrogen) in the air around the pod. After a 1-minute
-warm-up (orange LED blinks), it learns the clean-air reading and raises the alarm when the reading rises 120 points
-above it. It is not directional — it describes the air where the pod is — so the hazard zone is marked at the pod's
+warm-up (orange LED blinks), the module's digital output (DO) signals "gas" when the level passes the threshold set
+on its potentiometer; the pod confirms it over two readings to avoid flicker. (With the analog wiring option, the pod
+instead learns the clean-air level and alarms when the reading rises 120 points above it.) It is not directional — it describes the air where the pod is — so the hazard zone is marked at the pod's
 position.
 
 ### Where locations come from
@@ -139,7 +140,6 @@ Rescue teams' locations come from their phones' GPS through the browser.
 | MQ-2 gas sensor module (MQ-135 / MQ-5 also work) | Smoke / flammable-gas hazard |
 | 2 × red LED, 1 × orange LED (+ resistors) | SIGNAL, THERMAL, HAZARD indicators |
 | Passive buzzer | Audible priority alert |
-| 2 × 10 kΩ resistors | Voltage divider for the gas sensor's analog output |
 | Breadboard, jumper wires, USB cable | |
 
 ### Wiring
@@ -154,12 +154,24 @@ Rescue teams' locations come from their phones' GPS through the browser.
 | D6 (GPIO12) | Red LED #2 — **THERMAL** (through a resistor to GND) |
 | D7 (GPIO13) | Orange LED — **HAZARD** smoke/gas (through a resistor to GND) |
 | D8 (GPIO15) | Buzzer (other leg to GND) |
-| VIN (5 V) | MQ sensor VCC — the heater needs 5 V |
-| A0 | MQ sensor AO through a 10 kΩ resistor, **and** a second 10 kΩ resistor from A0 to GND |
-| D0, D3, D4 | Unused (boot-mode restricted) |
+| VIN (5 V) | MQ sensor **VCC** — the heater needs 5 V |
+| GND | MQ sensor **GND** |
+| D0 (GPIO16) | MQ sensor **DO** (digital "gas / no gas" output) |
+| — | MQ sensor **AO**: not connected |
+| D3, D4 | Unused (they must be HIGH at boot) |
 
-The MQ module's **AO** pin can output up to 5 V, but A0 must not exceed 3.3 V — the two equal resistors halve the
-voltage. The MQ **DO** pin is not used. The module gets warm during operation; this is normal.
+**Setting the gas alarm level:** the MQ module decides "gas / no gas" itself on its DO pin, using the small blue
+potentiometer. After the 1-minute warm-up, in clean air, turn the potentiometer until the module's **DO LED just
+turns off**. Smoke near the sensor should then turn it on, and the pod's orange LED with it. The module gets warm
+during operation; this is normal.
+
+DO is driven from the module's 5 V supply through its own pull-up resistor. ESP8266 pins are rated for 3.3 V, so for
+long-term use add a divider (or use the analog option below); for a prototype the module's pull-up keeps the
+current very small.
+
+*Analog option (`GAS_MODE GAS_ANALOG`):* gives a 0–1023 gas level and automatic clean-air calibration instead of the
+potentiometer. Connect **AO → resistor → A0** and **A0 → resistor → GND** with two equal resistors (e.g. 10 kΩ each),
+because AO can reach 5 V and A0 must stay below 3.3 V.
 
 ### Pod outputs
 
@@ -256,8 +268,9 @@ teams (Alpha, Bravo, Charlie).
 - Hold a phone with Wi-Fi on next to the pod (connected to a 2.4 GHz network and playing a video, or with its Wi-Fi
   settings screen open) → SIGNAL LED, the signal meter fills.
 - Both together → double beep, a **Very high** detection.
-- After the orange LED stops blinking, hold a just-blown-out match or incense stick near the gas sensor → orange LED,
-  low beep, a "Smoke / gas" hazard zone on the map.
+- After the orange LED stops blinking and the potentiometer is set, hold a just-blown-out match or incense stick
+  near the gas sensor → the module's DO LED and the pod's orange LED light, a low beep, and a "Smoke / gas" hazard
+  zone on the map.
 
 ### Without hardware
 
@@ -332,10 +345,11 @@ Browsers only give GPS to pages served over HTTPS (or `localhost`). On `http://1
 | `RSSI_THRESHOLD` | −70 dBm | Packet strength that counts as "phone close" |
 | `SIGNAL_HOLD_MS` | 8000 | Hold SIGNAL after the last strong packet (phones transmit in bursts) |
 | `LISTEN_WINDOW_MS` | 600 | Wi-Fi listening time per reading |
-| `GAS_SENSOR_ENABLED` | `true` | MQ gas sensor fitted on A0 |
+| `GAS_MODE` | `GAS_DIGITAL` | `GAS_DIGITAL` (DO → D0), `GAS_ANALOG` (AO → divider → A0) or `GAS_OFF` |
+| `GAS_DO_ACTIVE_LOW` | `true` | Most MQ modules pull DO low when gas is detected; set `false` if yours is the opposite |
 | `GAS_WARMUP_MS` | 60000 | Ignore the gas sensor while its heater warms up |
-| `GAS_RISE_ALARM` / `GAS_RISE_CLEAR` | 120 / 60 | Rise above clean air that starts / ends the alarm (0–1023 scale) |
-| `GAS_ABSOLUTE_ALARM` | 650 | Alarm at this raw value regardless of calibration |
+| `GAS_RISE_ALARM` / `GAS_RISE_CLEAR` | 120 / 60 | Analog mode: rise above clean air that starts / ends the alarm |
+| `GAS_ABSOLUTE_ALARM` | 650 | Analog mode: alarm at this raw value regardless of calibration |
 | `GAS_BEEP` | `true` | Low beep for smoke/gas when no person is detected |
 | `SERIAL_DEBUG_TEXT` | `true` | Also print a human-readable line (prefixed `#`) |
 | `UPLINK_WIFI` | `false` | Send readings over Wi-Fi instead of USB (see below) |
@@ -407,8 +421,8 @@ The backend's HTTP API (all paths under `/api`, JSON bodies):
 | Arduino upload fails: *could not open port COMx: Access is denied* | Another program holds the port. Click *Disconnect* in the Pod tab or close the Operations tab, close Serial Monitor and stop `npm run bridge`, then upload. Unplug and replug if needed. |
 | *Connect pod (USB)* is missing or says the browser can't read USB | Use Chrome or Edge, on `http://localhost:8080/ops` on the laptop the pod is plugged into. |
 | SIGNAL LED never lights | The ESP8266 only hears 2.4 GHz Wi-Fi. Keep the phone's Wi-Fi on, connected to a 2.4 GHz network or on its Wi-Fi settings screen. Check `PhonePkts` / `MaxRSSI` in the serial monitor; try `SIGNAL_ALL` or `RSSI_THRESHOLD -80`. |
-| THERMAL flickers or misses a hand | Aim directly at skin from 5–10 cm. In a very warm room, lower `HUMAN_DELTA_ABOVE_AMBIENT`. |
-| Gas sensor always / never alarms | Wait for the 1-minute warm-up; a new sensor is unsteady for its first hours powered. Raise or lower `GAS_RISE_ALARM`. Check the divider wiring on A0. |
+| THERMAL doesn't detect | Open the Serial Monitor: each `#` line ends with the reason, e.g. `MLX NOT FOUND - check wiring`, `too cold (<30C)`, `too hot (>38C)` or `not warmer than ambient enough`. Aim at bare skin from 5–10 cm. Keep the warm MQ sensor away from the MLX90614 — its heater warms the thermometer and whatever it sees. In a very warm room, lower `HUMAN_DELTA_ABOVE_AMBIENT`. |
+| Gas sensor always / never alarms | Wait for the 1-minute warm-up; a new sensor is unsteady for its first hours powered. Turn the module's potentiometer (DO LED just off in clean air). If the logic seems reversed, set `GAS_DO_ACTIVE_LOW false`. |
 | Phone says GPS needs HTTPS | See [GPS on phones](#gps-on-phones-https), or use *Set my spot*. |
 | Pod location is far off | Laptop location is approximate; use the phone tracker for real GPS. |
 | Phones can't open the site | Phone and laptop must be on the same Wi-Fi or hotspot; allow Node.js through the Windows firewall. |
